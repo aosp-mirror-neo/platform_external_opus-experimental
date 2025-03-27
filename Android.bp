@@ -11,7 +11,7 @@ license {
     ],
     license_text: [
         "COPYING",
-        "NOTICE",
+        "LICENSE",
     ],
 }
 
