@@ -1671,6 +1671,13 @@ opus_int32 opus_encode_native(OpusEncoder *st, const opus_res *pcm, int frame_si
         * 2 frames: Code 2 with different compressed sizes
         * >2 frames: Code 3 VBR */
        max_header_bytes = nb_frames == 2 ? 3 : (2+(nb_frames-1)*2);
+#ifdef ENABLE_QEXT
+       /* Cover the use of the separators that are the only thing that can get us over
+          once we consider that we need to subtract the extension overhead in each
+          of the individual frames. Also consider that a separator can get our padding
+          from 254 to 255, which costs an extra length byte (at most once). */
+       if (st->enable_qext) max_header_bytes += (nb_frames-1) + 1;
+#endif
 
        if (st->use_vbr || st->user_bitrate_bps==OPUS_BITRATE_MAX)
           repacketize_len = out_data_bytes;
@@ -2371,7 +2378,13 @@ static opus_int32 opus_encode_frame_native(OpusEncoder *st, const opus_res *pcm,
         /* If false, we already busted the budget and we'll end up with a "PLC frame" */
         if (ec_tell(&enc) <= 8*nb_compr_bytes)
         {
+#ifdef ENABLE_QEXT
+           if (st->mode == MODE_CELT_ONLY) celt_encoder_ctl(celt_enc, OPUS_SET_QEXT(st->enable_qext));
+#endif
            ret = celt_encode_with_ec(celt_enc, pcm_buf, frame_size, NULL, nb_compr_bytes, &enc);
+#ifdef ENABLE_QEXT
+           celt_encoder_ctl(celt_enc, OPUS_SET_QEXT(0));
+#endif
            if (ret < 0)
            {
               RESTORE_STACK;
@@ -3095,7 +3108,6 @@ int opus_encoder_ctl(OpusEncoder *st, int request, ...)
              goto bad_arg;
           }
           st->enable_qext = value;
-          celt_encoder_ctl(celt_enc, OPUS_SET_QEXT(st->enable_qext));
       }
       break;
       case OPUS_GET_QEXT_REQUEST:

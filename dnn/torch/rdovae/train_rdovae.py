@@ -54,12 +54,14 @@ model_group.add_argument('--lambda-min', type=float, help="minimal value for rat
 model_group.add_argument('--lambda-max', type=float, help="maximal value for rate lambda, default: 0.0104", default=0.0104)
 model_group.add_argument('--pvq-num-pulses', type=int, help="number of pulses for PVQ, default: 82", default=82)
 model_group.add_argument('--state-dropout-rate', type=float, help="state dropout rate, default: 0", default=0.0)
+model_group.add_argument('--softquant', action="store_true", help="enables soft quantization during training")
 
 training_group = parser.add_argument_group(title="training parameters")
 training_group.add_argument('--batch-size', type=int, help="batch size, default: 32", default=32)
 training_group.add_argument('--lr', type=float, help='learning rate, default: 3e-4', default=3e-4)
 training_group.add_argument('--epochs', type=int, help='number of training epochs, default: 100', default=100)
-training_group.add_argument('--sequence-length', type=int, help='sequence length, needs to be divisible by 4, default: 256', default=256)
+training_group.add_argument('--sequence-length', type=int, help='sequence length, needs to be divisible by chunks_per_offset, default: 400', default=400)
+training_group.add_argument('--chunks-per-offset', type=int, help='chunks per offset', default=4)
 training_group.add_argument('--lr-decay-factor', type=float, help='learning rate decay factor, default: 2.5e-5', default=2.5e-5)
 training_group.add_argument('--split-mode', type=str, choices=['split', 'random_split'], help='splitting mode for decoder input, default: split', default='split')
 training_group.add_argument('--enable-first-frame-loss', action='store_true', default=False, help='enables dedicated distortion loss on first 4 decoder frames')
@@ -109,6 +111,7 @@ quant_levels = args.quant_levels
 lambda_min = args.lambda_min
 lambda_max = args.lambda_max
 state_dim = args.state_dim
+softquant = args.softquant
 # not expsed
 num_features = 20
 
@@ -118,7 +121,7 @@ feature_file = args.features
 
 # model
 checkpoint['model_args']    = (num_features, latent_dim, quant_levels, cond_size, cond_size2)
-checkpoint['model_kwargs']  = {'state_dim': state_dim, 'split_mode' : split_mode, 'pvq_num_pulses': args.pvq_num_pulses, 'state_dropout_rate': args.state_dropout_rate}
+checkpoint['model_kwargs']  = {'state_dim': state_dim, 'split_mode' : split_mode, 'pvq_num_pulses': args.pvq_num_pulses, 'state_dropout_rate': args.state_dropout_rate, 'softquant': softquant, 'chunks_per_offset': args.chunks_per_offset}
 model = RDOVAE(*checkpoint['model_args'], **checkpoint['model_kwargs'])
 
 if type(args.initial_checkpoint) != type(None):
