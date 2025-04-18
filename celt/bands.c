@@ -112,36 +112,17 @@ void compute_band_energies(const CELTMode *m, const celt_sig *X, celt_ener *band
          maxval = celt_maxabs32(&X[c*N+(eBands[i]<<LM)], (eBands[i+1]-eBands[i])<<LM);
          if (maxval > 0)
          {
-            int shift, shift2;
-            shift = celt_ilog2(maxval) - 14;
-            shift2 = (((m->logN[i]>>BITRES)+LM+1)>>1);
-            j=eBands[i]<<LM;
-            if (shift>0)
-            {
-               do {
-                  sum = ADD32(sum, SHR32(MULT16_16(EXTRACT16(SHR32(X[j+c*N],shift)),
-                        EXTRACT16(SHR32(X[j+c*N],shift))), 2*shift2));
-               } while (++j<eBands[i+1]<<LM);
-            } else {
-               do {
-                  sum = ADD32(sum, SHR32(MULT16_16(EXTRACT16(SHL32(X[j+c*N],-shift)),
-                        EXTRACT16(SHL32(X[j+c*N],-shift))), 2*shift2));
-               } while (++j<eBands[i+1]<<LM);
-            }
-            shift+=shift2;
-            while (sum < 1<<28) {
-               sum <<=2;
-               shift -= 1;
-            }
-            /* We're adding one here to ensure the normalized band isn't larger than unity norm */
-            bandE[i+c*m->nbEBands] = EPSILON+VSHR32(celt_sqrt(sum),-shift);
+            int shift = IMAX(0, 30 - celt_ilog2(maxval+(maxval>>14)+1) - ((((m->logN[i]+7)>>BITRES)+LM+1)>>1));
+            j=eBands[i]<<LM; do {
+               opus_val32 x = SHL32(X[j+c*N],shift);
+               sum = ADD32(sum, MULT32_32_Q31(x, x));
+            } while (++j<eBands[i+1]<<LM);
+            bandE[i+c*m->nbEBands] = MAX32(maxval, PSHR32(celt_sqrt32(SHR32(sum,1)), shift));
          } else {
             bandE[i+c*m->nbEBands] = EPSILON;
          }
-         /*printf ("%f ", bandE[i+c*m->nbEBands]);*/
       }
    } while (++c<C);
-   /*printf ("\n");*/
 }
 
 /* Normalise each band such that the energy is one. */
@@ -152,21 +133,19 @@ void normalise_bands(const CELTMode *m, const celt_sig * OPUS_RESTRICT freq, cel
    N = M*m->shortMdctSize;
    c=0; do {
       i=0; do {
-         opus_val16 g;
          int j,shift;
          opus_val32 E;
-         shift = celt_zlog2(bandE[i+c*m->nbEBands])-14;
-         E = VSHR32(bandE[i+c*m->nbEBands], shift-2);
-         g = EXTRACT16(celt_rcp(E));
-         if (shift > 0) {
-            j=M*eBands[i]; do {
-               X[j+c*N] = VSHR32(MULT16_32_Q15(g, freq[j+c*N]),shift+14-NORM_SHIFT);
-            } while (++j<M*eBands[i+1]);
-         } else {
-            j=M*eBands[i]; do {
-               X[j+c*N] = VSHR32(MULT16_16(g, freq[j+c*N]),29-NORM_SHIFT+shift);
-            } while (++j<M*eBands[i+1]);
-         }
+         opus_val32 g;
+         E = bandE[i+c*m->nbEBands];
+         /* For very low energies, we need this to make sure not to prevent energy rounding from
+            blowing up the normalized signal. */
+         if (E < 10) E += EPSILON;
+         shift = 30-celt_zlog2(E);
+         E = SHL32(E, shift);
+         g = celt_rcp_norm32(E);
+         j=M*eBands[i]; do {
+            X[j+c*N] = PSHR32(MULT32_32_Q31(g, SHL32(freq[j+c*N], shift)), 30-NORM_SHIFT);
+         } while (++j<M*eBands[i+1]);
       } while (++i<end);
    } while (++c<C);
 }
@@ -252,8 +231,8 @@ void denormalise_bands(const CELTMode *m, const celt_norm * OPUS_RESTRICT X,
       g = celt_exp2_db(MIN32(32.f, lg));
 #else
       /* Handle the integer part of the log energy */
-      shift = NORM_SHIFT+1-(lg>>DB_SHIFT)-16;
-      if (shift>=29)
+      shift = 17-(lg>>DB_SHIFT);
+      if (shift>=31)
       {
          shift=0;
          g=0;
@@ -267,22 +246,14 @@ void denormalise_bands(const CELTMode *m, const celt_norm * OPUS_RESTRICT X,
          /* To avoid overflow, we're
             capping the gain here, which is equivalent to a cap of 18 on lg.
             This shouldn't trigger unless the bitstream is already corrupted. */
-         if (shift < NORM_SHIFT-32)
-         {
-            g = 2147483647;
-            shift = NORM_SHIFT-32;
-         }
-         do {
-            *f++ = PSHR32(MULT32_32_Q31(SHL32(*x, -shift), g), 2);
-            x++;
-         } while (++j<band_end);
-      } else
+         g = 2147483647;
+         shift = 0;
+      }
 #endif
-         /* Be careful of the fixed-point "else" just above when changing this code */
-         do {
-            *f++ = PSHR32(MULT32_32_Q31(*x, g), shift+2);
-            x++;
-         } while (++j<band_end);
+      do {
+         *f++ = PSHR32(MULT32_32_Q31(SHL32(*x, 30-NORM_SHIFT), g), shift);
+         x++;
+      } while (++j<band_end);
    }
    celt_assert(start <= end);
    OPUS_CLEAR(&freq[bound], N-bound);
@@ -422,14 +393,15 @@ static void intensity_stereo(const CELTMode *m, celt_norm * OPUS_RESTRICT X, con
    left = VSHR32(bandE[i],shift);
    right = VSHR32(bandE[i+m->nbEBands],shift);
    norm = EPSILON + celt_sqrt(EPSILON+MULT16_16(left,left)+MULT16_16(right,right));
-   a1 = DIV32_16(SHL32(EXTEND32(left),14),norm);
-   a2 = DIV32_16(SHL32(EXTEND32(right),14),norm);
+#ifdef FIXED_POINT
+   left = MIN32(left, norm-1);
+   right = MIN32(right, norm-1);
+#endif
+   a1 = DIV32_16(SHL32(EXTEND32(left),15),norm);
+   a2 = DIV32_16(SHL32(EXTEND32(right),15),norm);
    for (j=0;j<N;j++)
    {
-      opus_val16 r, l;
-      l = EXTRACT16(PSHR32(X[j], NORM_SHIFT-14));
-      r = EXTRACT16(PSHR32(Y[j], NORM_SHIFT-14));
-      X[j] = PSHR32(MAC16_16(MULT16_16(a1, l), a2, r), 28-NORM_SHIFT);
+      X[j] = ADD32(MULT16_32_Q15(a1, X[j]), MULT16_32_Q15(a2, Y[j]));
       /* Side is not encoded, no need to calculate */
    }
 }
@@ -1115,7 +1087,7 @@ static unsigned quant_partition(struct band_ctx *ctx, celt_norm *X,
       int extra_bits;
       int ext_remaining_bits;
       extra_bits = ext_b/(N-1)>>BITRES;
-      ext_remaining_bits = ctx->ext_total_bits-ec_tell_frac(ctx->ext_ec);
+      ext_remaining_bits = ctx->ext_total_bits-(opus_int32)ec_tell_frac(ctx->ext_ec);
       if (ext_remaining_bits < ((extra_bits+1)*(N-1)+N)<<BITRES) {
          extra_bits = (ext_remaining_bits-(N<<BITRES))/(N-1)>>BITRES;
          extra_bits = IMAX(extra_bits-1, 0);
@@ -1692,6 +1664,7 @@ void quant_all_bands(int encode, const CELTMode *m, int start, int end,
    ctx.ext_ec = ext_ec;
    ctx.ext_total_bits = ext_total_bits;
    ctx.extra_bands = end == NB_QEXT_BANDS || end == 2;
+   if (ctx.extra_bands) theta_rdo = 0;
 #endif
    /* Avoid injecting noise in the first band on transients. */
    ctx.avoid_split_noise = B > 1;
@@ -1872,7 +1845,7 @@ void quant_all_bands(int encode, const CELTMode *m, int start, int end,
 #ifdef ENABLE_QEXT
                ext_nstart_bytes = ext_ec_save.offs;
                ext_nend_bytes = ext_ec_save.storage;
-               ext_bytes_buf = ext_ec_save.buf+ext_nstart_bytes;
+               ext_bytes_buf = ext_ec_save.buf!=NULL ? ext_ec_save.buf+ext_nstart_bytes : NULL;
                ext_save_bytes = ext_nend_bytes-ext_nstart_bytes;
                if (ext_save_bytes) OPUS_COPY(ext_bytes_save, ext_bytes_buf, ext_save_bytes);
 #endif

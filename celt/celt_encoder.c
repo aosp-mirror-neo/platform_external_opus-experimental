@@ -1187,7 +1187,7 @@ static celt_glog dynalloc_analysis(const celt_glog *bandLogE, const celt_glog *b
       /* Compensate for Opus' under-allocation on tones. */
       if (toneishness > QCONST32(.98f, 29)) {
 #ifdef FIXED_POINT
-         int freq_bin = PSHR32(MULT16_16(QEXT_SCALE(tone_freq), QCONST16(120/M_PI, 9)), 13+9);
+         int freq_bin = PSHR32(QEXT_SCALE((opus_val32)tone_freq)*QCONST16(120/M_PI, 9), 13+9);
 #else
          int freq_bin = (int)floor(.5 + QEXT_SCALE(tone_freq)*120/M_PI);
 #endif
@@ -1330,9 +1330,11 @@ static int tone_lpc(const opus_val16 *x, int len, int delay, opus_val32 *lpc) {
 #endif
    num1 = MULT32_32_Q31(r02,r11) - MULT32_32_Q31(r01,r12);
    if (num1 >= den) lpc[1] = QCONST32(1.f, 29);
+   else if (num1 <= -den) lpc[1] = -QCONST32(1.f, 29);
    else lpc[1] = frac_div32_q29(num1, den);
    num0 = MULT32_32_Q31(r00,r12) - MULT32_32_Q31(r02,r01);
-   if (HALF32(num0) >= den) lpc[0] = QCONST32(1.999f, 29);
+   if (HALF32(num0) >= den) lpc[0] = QCONST32(1.999999f, 29);
+   else if (HALF32(num0) <= -den) lpc[0] = -QCONST32(1.999999f, 29);
    else lpc[0] = frac_div32_q29(num0, den);
    /*printf("%f %f\n", lpc[0], lpc[1]);*/
    return 0;
@@ -1347,13 +1349,13 @@ static opus_val16 tone_detect(const celt_sig *in, const celt_sig *prefilter_mem,
    opus_val16 freq;
    VARDECL(opus_val16, x);
    ALLOC(x, N+overlap, opus_val16);
-   /* Shift by SIG_SHIFT+1 (+2 for stereo) to account for HF gain of the preemphasis filter. */
+   /* Shift by SIG_SHIFT+2 (+3 for stereo) to account for HF gain of the preemphasis filter. */
    if (CC==2) {
-      for (i=0;i<N;i++) x[i+overlap] = PSHR32(ADD32(in[i], in[i+N+overlap]), SIG_SHIFT+2);
-      for (i=0;i<overlap;i++) x[i] = PSHR32(ADD32(prefilter_mem[QEXT_SCALE(COMBFILTER_MAXPERIOD)-overlap+i], prefilter_mem[2*QEXT_SCALE(COMBFILTER_MAXPERIOD)-overlap+i]), SIG_SHIFT+2);
+      for (i=0;i<N;i++) x[i+overlap] = PSHR32(ADD32(in[i], in[i+N+overlap]), SIG_SHIFT+3);
+      for (i=0;i<overlap;i++) x[i] = PSHR32(ADD32(prefilter_mem[QEXT_SCALE(COMBFILTER_MAXPERIOD)-overlap+i], prefilter_mem[2*QEXT_SCALE(COMBFILTER_MAXPERIOD)-overlap+i]), SIG_SHIFT+3);
    } else {
-      for (i=0;i<N;i++) x[i+overlap] = PSHR32(in[i], SIG_SHIFT+1);
-      for (i=0;i<overlap;i++) x[i] = PSHR32(prefilter_mem[QEXT_SCALE(COMBFILTER_MAXPERIOD)-overlap+i], SIG_SHIFT+1);
+      for (i=0;i<N;i++) x[i+overlap] = PSHR32(in[i], SIG_SHIFT+2);
+      for (i=0;i<overlap;i++) x[i] = PSHR32(prefilter_mem[QEXT_SCALE(COMBFILTER_MAXPERIOD)-overlap+i], SIG_SHIFT+2);
    }
 #ifdef FIXED_POINT
    normalize_tone_input(x, N+overlap);
@@ -1365,11 +1367,11 @@ static opus_val16 tone_detect(const celt_sig *in, const celt_sig *prefilter_mem,
       fail = tone_lpc(x, N+overlap, delay, lpc);
    }
    /* Check that our filter has complex roots. */
-   if (!fail && MULT32_32_Q31(lpc[0],lpc[0]) + MULT32_32_Q31(QCONST32(4.f, 29), lpc[1]) < 0) {
+   if (!fail && MULT32_32_Q31(lpc[0],lpc[0]) + MULT32_32_Q31(QCONST32(3.999999, 29), lpc[1]) < 0) {
       /* Squared radius of the poles. */
       *toneishness = -lpc[1];
 #ifdef FIXED_POINT
-      freq = acos_approx(lpc[0]>>1)/delay;
+      freq = (acos_approx(lpc[0]>>1)+delay/2)/delay;
 #else
       freq = acos(.5f*lpc[0])/delay;
 #endif
@@ -1382,7 +1384,8 @@ static opus_val16 tone_detect(const celt_sig *in, const celt_sig *prefilter_mem,
 }
 
 static int run_prefilter(CELTEncoder *st, celt_sig *in, celt_sig *prefilter_mem, int CC, int N,
-      int prefilter_tapset, int *pitch, opus_val16 *gain, int *qgain, int enabled, int nbAvailableBytes, AnalysisInfo *analysis, opus_val16 tone_freq, opus_val32 toneishness ARG_QEXT(int qext_scale))
+      int prefilter_tapset, int *pitch, opus_val16 *gain, int *qgain, int enabled, int complexity,
+      int nbAvailableBytes, AnalysisInfo *analysis, opus_val16 tone_freq, opus_val32 toneishness ARG_QEXT(int qext_scale))
 {
    int c;
    VARDECL(celt_sig, _pre);
@@ -1412,8 +1415,30 @@ static int run_prefilter(CELTEncoder *st, celt_sig *in, celt_sig *prefilter_mem,
       OPUS_COPY(pre[c]+max_period, in+c*(N+overlap)+overlap, N);
    } while (++c<CC);
 
-   if (enabled)
-   {
+   /* If we detect that the signal is dominated by a single tone, don't rely on the standard pitch
+      estimator, as it can become unreliable. */
+   if (enabled && toneishness > QCONST32(.99f, 29)) {
+      int multiple=1;
+      /* Using aliased version of the postfilter above 24 kHz.
+         First value is purposely slightly above pi to avoid triggering for Fs=48kHz. */
+      if (QEXT_SCALE(tone_freq) >= QCONST16(3.1416f, 13)) tone_freq = QCONST16(3.141593f, 13) - tone_freq;
+      /* If the pitch is too high for our post-filter, apply pitch doubling until
+         we can get something that fits (not ideal, but better than nothing). */
+      while (QEXT_SCALE(tone_freq) >= multiple*QCONST16(0.39f, 13)) multiple++;
+      if (QEXT_SCALE(tone_freq) > QCONST16(0.006148f, 13)) {
+#ifdef FIXED_POINT
+         pitch_index = IMIN((51472*multiple+QEXT_SCALE(tone_freq)/2)/QEXT_SCALE(tone_freq), COMBFILTER_MAXPERIOD-2);
+#else
+         pitch_index = IMIN((int)floor(.5+2.f*M_PI*multiple/QEXT_SCALE(tone_freq)), COMBFILTER_MAXPERIOD-2);
+#endif
+      } else {
+         /* If the pitch is too low, using a very high pitch will actually give us an improvement
+            due to the DC component of the filter that will be close to our tone. Again, not ideal,
+            but if we only have a single tone, it's better than nothing. */
+         pitch_index = COMBFILTER_MINPERIOD;
+      }
+      gain1 = QCONST16(.75f, 15);
+   } else if (enabled && complexity >= 5) {
       VARDECL(opus_val16, pitch_buf);
       ALLOC(pitch_buf, (max_period+N)>>1, opus_val16);
 
@@ -1429,32 +1454,10 @@ static int run_prefilter(CELTEncoder *st, celt_sig *in, celt_sig *prefilter_mem,
             N, &pitch_index, st->prefilter_period, st->prefilter_gain, st->arch);
       if (pitch_index > max_period-QEXT_SCALE(2))
          pitch_index = max_period-QEXT_SCALE(2);
-      gain1 = MULT16_16_Q15(QCONST16(.7f,15),gain1);
-      /* If we detect that the signal is dominated by a single tone, don't rely on the standard pitch
-         estimator, as it can become unreliable. */
-      if (toneishness > QCONST32(.99f, 29)) {
-         int multiple=1;
-         /* Using aliased version of the postfilter above 24 kHz.
-            First value is purposely slightly above pi to avoid triggering for Fs=48kHz. */
-         if (QEXT_SCALE(tone_freq) >= QCONST16(3.1416f, 13)) tone_freq = QCONST16(3.141593f, 13) - tone_freq;
-         /* If the pitch is too high for our post-filter, apply pitch doubling until
-            we can get something that fits (not ideal, but better than nothing). */
-         while (QEXT_SCALE(tone_freq) >= multiple*QCONST16(0.39f, 13)) multiple++;
-         tone_freq /= multiple;
-         if (QEXT_SCALE(tone_freq) > QCONST16(0.006148f, 13)) {
-#ifdef FIXED_POINT
-            pitch_index = IMIN(51472/tone_freq, max_period-QEXT_SCALE(2));
-#else
-            pitch_index = IMIN((int)floor(.5+2.f*M_PI/tone_freq), max_period-QEXT_SCALE(2));
+#ifdef ENABLE_QEXT
+   pitch_index /= qext_scale;
 #endif
-         } else {
-            /* If the pitch is too low, using a very high pitch will actually give us an improvement
-               due to the DC component of the filter that will be close to our tone. Again, not ideal,
-               but if we only have a single tone, it's better than nothing. */
-            pitch_index = min_period;
-         }
-         gain1 = QCONST16(.75f, 15);
-      }
+      gain1 = MULT16_16_Q15(QCONST16(.7f,15),gain1);
       /*printf("%d %d %f %f\n", pitch_change, pitch_index, gain1, st->analysis.tonality);*/
       if (st->loss_rate>2)
          gain1 = HALF32(gain1);
@@ -1464,11 +1467,8 @@ static int run_prefilter(CELTEncoder *st, celt_sig *in, celt_sig *prefilter_mem,
          gain1 = 0;
    } else {
       gain1 = 0;
-      pitch_index = min_period;
+      pitch_index = COMBFILTER_MINPERIOD;
    }
-#ifdef ENABLE_QEXT
-   pitch_index /= qext_scale;
-#endif
 #ifndef DISABLE_FLOAT_API
    if (analysis->valid)
       gain1 = (opus_val16)(gain1 * analysis->max_pitch_ratio);
@@ -1956,11 +1956,10 @@ int celt_encode_with_ec(CELTEncoder * OPUS_RESTRICT st, const opus_res * pcm, in
    {
       int enabled;
       int qg;
-      enabled = ((st->lfe&&nbAvailableBytes>3) || nbAvailableBytes>12*C) && !hybrid && !silence && tell+16<=total_bits && !st->disable_pf
-            && st->complexity >= 5;
+      enabled = ((st->lfe&&nbAvailableBytes>3) || nbAvailableBytes>12*C) && !hybrid && !silence && tell+16<=total_bits && !st->disable_pf;
 
       prefilter_tapset = st->tapset_decision;
-      pf_on = run_prefilter(st, in, prefilter_mem, CC, N, prefilter_tapset, &pitch_index, &gain1, &qg, enabled, nbAvailableBytes, &st->analysis, tone_freq, toneishness ARG_QEXT(qext_scale));
+      pf_on = run_prefilter(st, in, prefilter_mem, CC, N, prefilter_tapset, &pitch_index, &gain1, &qg, enabled, st->complexity, nbAvailableBytes, &st->analysis, tone_freq, toneishness ARG_QEXT(qext_scale));
       if ((gain1 > QCONST16(.4f,15) || st->prefilter_gain > QCONST16(.4f,15)) && (!st->analysis.valid || st->analysis.tonality > .3)
             && (pitch_index > 1.26*st->prefilter_period || pitch_index < .79*st->prefilter_period))
          pitch_change = 1;
@@ -2514,7 +2513,7 @@ int celt_encode_with_ec(CELTEncoder * OPUS_RESTRICT st, const opus_res * pcm, in
    ALLOC(fine_priority, nbEBands, int);
 
    /* bits =           packet size                    - where we are - safety*/
-   bits = (((opus_int32)nbCompressedBytes*8)<<BITRES) - ec_tell_frac(enc) - 1;
+   bits = (((opus_int32)nbCompressedBytes*8)<<BITRES) - (opus_int32)ec_tell_frac(enc) - 1;
    anti_collapse_rsv = isTransient&&LM>=2&&bits>=((LM+2)<<BITRES) ? (1<<BITRES) : 0;
    bits -= anti_collapse_rsv;
    signalBandwidth = end-1;
@@ -2570,7 +2569,7 @@ int celt_encode_with_ec(CELTEncoder * OPUS_RESTRICT st, const opus_res * pcm, in
    ALLOC(extra_pulses, nbEBands+NB_QEXT_BANDS, int);
    ALLOC(error_bak, C*nbEBands, celt_glog);
 
-   qext_bits = ((opus_int32)qext_bytes*8<<BITRES) - ec_tell_frac(enc) - 1;
+   qext_bits = ((opus_int32)qext_bytes*8<<BITRES) - (opus_int32)ec_tell_frac(enc) - 1;
    clt_compute_extra_allocation(mode, qext_mode, start, end, qext_end, bandLogE, qext_bandLogE,
          qext_bits, extra_pulses, extra_quant, C, LM, &ext_enc, 1, tone_freq, toneishness);
    OPUS_COPY(error_bak, error, C*nbEBands);
