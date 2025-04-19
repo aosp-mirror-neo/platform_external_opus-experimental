@@ -1,6 +1,7 @@
 /* Copyright (c) 2002-2008 Jean-Marc Valin
    Copyright (c) 2007-2008 CSIRO
    Copyright (c) 2007-2009 Xiph.Org Foundation
+   Copyright (c) 2024 Arm Limited
    Written by Jean-Marc Valin, and Yunho Huh */
 /**
    @file mathops.h
@@ -37,6 +38,11 @@
 #include "arch.h"
 #include "entcode.h"
 #include "os_support.h"
+
+
+#if defined(OPUS_ARM_MAY_HAVE_NEON_INTR)
+#include "arm/mathops_arm.h"
+#endif
 
 #define PI 3.1415926535897931
 
@@ -217,6 +223,7 @@ static OPUS_INLINE float celt_cos_norm2(float x)
 #ifndef FIXED_POINT
 
 #define celt_sqrt(x) ((float)sqrt(x))
+#define celt_sqrt32(x) ((float)sqrt(x))
 #define celt_rsqrt(x) (1.f/celt_sqrt(x))
 #define celt_rsqrt_norm(x) (celt_rsqrt(x))
 #define celt_rsqrt_norm32(x) (celt_rsqrt(x))
@@ -264,15 +271,15 @@ static const float log2_y_norm_coeff[8] = {
 
 static OPUS_INLINE float celt_log2(float x)
 {
-   int integer;
+   opus_int32 integer;
    opus_int32 range_idx;
    union {
       float f;
       opus_uint32 i;
    } in;
    in.f = x;
-   integer = (in.i>>23)-127;
-   in.i -= (opus_uint32)integer<<23;
+   integer = (opus_int32)(in.i>>23)-127;
+   in.i = (opus_int32)in.i - (opus_int32)((opus_uint32)integer<<23);
 
    /* Normalize the mantissa range from [1, 2] to [1,1.125], and then shift x
     * by 1.0625 to [-0.0625, 0.0625]. */
@@ -305,7 +312,7 @@ static OPUS_INLINE float celt_log2(float x)
  *         = exp2(integer) * exp2(fraction) */
 static OPUS_INLINE float celt_exp2(float x)
 {
-   int integer;
+   opus_int32 integer;
    float frac;
    union {
       float f;
@@ -331,7 +338,7 @@ static OPUS_INLINE float celt_exp2(float x)
                + frac * (EXP2_COEFF_A3
                + frac * (EXP2_COEFF_A4
                + frac * (EXP2_COEFF_A5)))));
-   res.i = (res.i + ((opus_uint32)integer<<23)) & 0x7fffffff;
+   res.i = (opus_uint32)((opus_int32)res.i + (opus_int32)((opus_uint32)integer<<23)) & 0x7fffffff;
    return res.f;
 }
 
@@ -370,6 +377,8 @@ opus_val16 celt_rsqrt_norm(opus_val32 x);
 opus_val32 celt_rsqrt_norm32(opus_val32 x);
 
 opus_val32 celt_sqrt(opus_val32 x);
+
+opus_val32 celt_sqrt32(opus_val32 x);
 
 opus_val16 celt_cos_norm(opus_val32 x);
 
@@ -521,6 +530,7 @@ static OPUS_INLINE opus_val32 celt_exp2_db(opus_val32 x)
 
 
 opus_val32 celt_rcp(opus_val32 x);
+opus_val32 celt_rcp_norm32(opus_val32 x);
 
 #define celt_div(a,b) MULT32_32_Q31((opus_val32)(a),celt_rcp(b))
 
@@ -628,4 +638,15 @@ static OPUS_INLINE opus_val16 celt_atan2p(opus_val16 y, opus_val16 x)
 }
 
 #endif /* FIXED_POINT */
+
+#ifndef DISABLE_FLOAT_API
+
+void celt_float2int16_c(const float * OPUS_RESTRICT in, short * OPUS_RESTRICT out, int cnt);
+
+#ifndef OVERRIDE_FLOAT2INT16
+#define celt_float2int16(in, out, cnt, arch) ((void)(arch), celt_float2int16_c(in, out, cnt))
+#endif
+
+#endif /* DISABLE_FLOAT_API */
+
 #endif /* MATHOPS_H */

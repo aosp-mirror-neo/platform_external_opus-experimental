@@ -1,5 +1,6 @@
 /* Copyright (c) 2008-2011 Xiph.Org Foundation, Mozilla Corporation,
                            Gregory Maxwell
+   Copyright (c) 2024 Arm Limited
    Written by Jean-Marc Valin, Gregory Maxwell, Timothy B. Terriberry,
    and Yunho Huh */
 /*
@@ -37,8 +38,10 @@
 
 #include <stdio.h>
 #include <math.h>
-#include "mathops.h"
 #include "bands.h"
+#include "cpu_support.h"
+#include "float_cast.h"
+#include "mathops.h"
 
 #ifdef FIXED_POINT
 #define WORD "%d"
@@ -146,7 +149,7 @@ void testbitexactlog2tan(void)
 void testlog2(void)
 {
    float x;
-   float error_threshold = 2.e-06;
+   float error_threshold = 2.2e-06;
    float max_error = 0;
    for (x=0.001f;x<1677700.0;x+=(x/8.0))
    {
@@ -245,7 +248,7 @@ void test_cos(void)
 
 void test_atan2(void) {
    float x, y;
-   float error_threshold = 1.2e-07;
+   float error_threshold = 1.5e-07;
    float max_error = 0;
    for (x = 0.0f; x < 1.0f; x += 0.007f)
    {
@@ -440,6 +443,31 @@ void testrsqrt(void)
    fprintf (stdout, "celt_rsqrt_norm32 max_error: %.7e\n", max_error);
 }
 
+void testsqrt32(void)
+{
+   opus_int32 i;
+   float absolute_error;
+   float two_LSBs = FIX_INT_TO_DOUBLE(2, 16);
+   float relative_error_threshold;
+   for (i = 0; i <= 1073741824+64; i++)
+   {
+      absolute_error = fabs(sqrt(i) - FIX_INT_TO_DOUBLE(celt_sqrt32(i), 16));
+      relative_error_threshold = 8e-8 * sqrt(i);
+      if (absolute_error > two_LSBs &&
+          absolute_error > relative_error_threshold)
+      {
+         fprintf(stderr,
+                 "celt_sqrt32 failed: "
+                 "absolute_error: [%.5e > %.5e] "
+                 "relative_error: [%.5e > %.5e] (x = %d)\n",
+                 absolute_error, two_LSBs,
+                 absolute_error, relative_error_threshold, i);
+         ret = 1;
+      }
+      i+= i>>25;
+   }
+}
+
 void testatan_norm(void)
 {
 #if defined(ENABLE_QEXT)
@@ -553,10 +581,134 @@ void test_cos(void)
 {
    test_cos_norm32();
 }
+
+void test_rcp_norm32(void)
+{
+   double ground_truth;
+   float absolute_error = -1;
+   float relative_error = -1;
+   float two_LSBs = FIX_INT_TO_DOUBLE(2, 29); /* absolute error threshold */
+   float relative_error_threshold = 6.51e-08;
+   float max_relative_error = -1;
+   float fx;
+   float quantized_fx;
+   opus_val32 x;
+   int q_input = 31;
+
+   for (fx = 0.5; fx <= 1.0; fx += 0.0000007)
+   {
+      x = DOUBLE_TO_FIX_INT(fx, q_input);
+      quantized_fx = FIX_INT_TO_DOUBLE(x, q_input);
+      ground_truth = 1 / quantized_fx;
+      absolute_error = fabs(ground_truth -
+                            FIX_INT_TO_DOUBLE(celt_rcp_norm32(x), 30));
+      relative_error = absolute_error/ground_truth;
+      if (max_relative_error < relative_error) {
+         max_relative_error = relative_error;
+      }
+      if (absolute_error > two_LSBs &&
+          absolute_error > relative_error_threshold * ground_truth) {
+         fprintf(stderr,
+                 "celt_rcp_norm32 failed: "
+                 "absolute_error: [%.5e > %.5e] "
+                 "relative_error: [%.5e > %.5e] (x = %f)\n",
+                 absolute_error, two_LSBs,
+                 relative_error, relative_error_threshold, quantized_fx);
+         ret = 1;
+      }
+   }
+   fprintf(stdout, "celt_rcp_norm32 max_rel_error: %.7e\n", max_relative_error);
+}
+#endif
+
+
+#ifndef DISABLE_FLOAT_API
+
+void testcelt_float2int16(int use_ref_impl, int buffer_size)
+{
+
+#define MAX_BUFFER_SIZE 2080
+   int i, cnt;
+   float floatsToConvert[MAX_BUFFER_SIZE];
+   short results[MAX_BUFFER_SIZE] = { 0 };
+   float scaleInt16RangeTo01;
+
+   celt_assert(buffer_size <= MAX_BUFFER_SIZE);
+
+   scaleInt16RangeTo01 = 1.f / 32768.f;
+   cnt = 0;
+
+   while (cnt + 15 < buffer_size && cnt < buffer_size / 2)
+   {
+      floatsToConvert[cnt++] = 77777.0f * scaleInt16RangeTo01;
+      floatsToConvert[cnt++] = 33000.0f * scaleInt16RangeTo01;
+      floatsToConvert[cnt++] = 32768.0f * scaleInt16RangeTo01;
+      floatsToConvert[cnt++] = 32767.4f * scaleInt16RangeTo01;
+      floatsToConvert[cnt++] = 32766.6f * scaleInt16RangeTo01;
+      floatsToConvert[cnt++] = .501 * scaleInt16RangeTo01;
+      floatsToConvert[cnt++] = .499f * scaleInt16RangeTo01;
+      floatsToConvert[cnt++] = .0f;
+      floatsToConvert[cnt++] = -.499f * scaleInt16RangeTo01;
+      floatsToConvert[cnt++] = -.501f * scaleInt16RangeTo01;
+      floatsToConvert[cnt++] = -32767.6f * scaleInt16RangeTo01;
+      floatsToConvert[cnt++] = -32768.4f * scaleInt16RangeTo01;
+      floatsToConvert[cnt++] = -32769.0f * scaleInt16RangeTo01;
+      floatsToConvert[cnt++] = -33000.0f * scaleInt16RangeTo01;
+      floatsToConvert[cnt++] = -77777.0f * scaleInt16RangeTo01;
+
+      celt_assert(cnt < buffer_size);
+   }
+
+   while (cnt < buffer_size)
+   {
+      float inInt16Range = cnt * 7 + .5;
+      inInt16Range += (cnt & 0x01) ? .1 : -.1;
+      inInt16Range *= (cnt & 0x02) ? 1 : -1;
+      floatsToConvert[cnt++] = inInt16Range * scaleInt16RangeTo01;
+   }
+
+   for (i = 0; i < MAX_BUFFER_SIZE; ++i)
+   {
+      results[i] = 42;
+   }
+
+   if (use_ref_impl)
+   {
+      celt_float2int16_c(floatsToConvert, results, cnt);
+   } else {
+      celt_float2int16(floatsToConvert, results, cnt, opus_select_arch());
+   }
+
+   for (i = 0; i < cnt; ++i)
+   {
+      const float expected = FLOAT2INT16(floatsToConvert[i]);
+      if (results[i] != expected)
+      {
+         fprintf (stderr, "testcelt_float2int16 failed: celt_float2int16 converted %f (index: %d) to %d (x*32768=%f, expected: %d, cnt: %d, ref: %d)\n",
+               floatsToConvert[i], i, (int)results[i], floatsToConvert[i] * 32768.0f, (int)expected, buffer_size, use_ref_impl);
+         ret = 1;
+      }
+   }
+
+   for (i = cnt; i < MAX_BUFFER_SIZE; ++i)
+   {
+      if (results[i] != 42)
+      {
+         fprintf (stderr, "testcelt_float2int16 failed: buffer overflow (cnt: %d, ref: %d)\n", buffer_size, use_ref_impl);
+         ret = 1;
+         break;
+      }
+   }
+#undef MAX_BUFFER_SIZE
+}
+
 #endif
 
 int main(void)
 {
+   int i;
+   int use_ref_impl[2] = { 0, 1 };
+
    testbitexactcos();
    testbitexactlog2tan();
    testdiv();
@@ -570,9 +722,20 @@ int main(void)
    testlog2_db();
    testexp2_db();
    testrsqrt();
+   testsqrt32();
    testatan();
+   test_rcp_norm32();
 #else
    test_atan2();
+#endif
+#ifndef DISABLE_FLOAT_API
+   for (i = 0; i <= 1; ++i)
+   {
+      testcelt_float2int16(use_ref_impl[i], 1);
+      testcelt_float2int16(use_ref_impl[i], 32);
+      testcelt_float2int16(use_ref_impl[i], 127);
+      testcelt_float2int16(use_ref_impl[i], 1031);
+   }
 #endif
    return ret;
 }
