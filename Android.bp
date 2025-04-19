@@ -18,6 +18,7 @@ license {
 cc_library {
     name: "libopus-experimental",
     vendor_available: true,
+    host_supported: true,
 
     export_include_dirs: ["include"],
 
@@ -236,8 +237,5 @@ cc_library {
         },
     },
 
-    apex_available: [
-        "com.android.bt",
-    ],
     min_sdk_version: "35",
 }
