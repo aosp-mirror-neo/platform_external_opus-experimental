@@ -7,9 +7,9 @@ third_party {
     type: "Archive"
     value: "https://gitlab.xiph.org/xiph/opus.git"
     primary_source: true
-    version: "c65ca8fe5529d6151934db0e397ef6fde43f51ce"
+    version: "62c7bec8142c36f03725e25ee9b6553a4097c76e"
   }
-  version: "c65ca8fe5529d6151934db0e397ef6fde43f51ce"
-  last_upgrade_date { year: 2025 month: 4 day: 15 }
+  version: "62c7bec8142c36f03725e25ee9b6553a4097c76e"
+  last_upgrade_date { year: 2025 month: 5 day: 13 }
   license_type: BY_EXCEPTION_ONLY
 }
