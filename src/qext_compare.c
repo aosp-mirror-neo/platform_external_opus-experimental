@@ -29,7 +29,9 @@
 #include <stdlib.h>
 #include <math.h>
 #include <string.h>
+#include "mini_kfft.c"
 
+#define MAX(a,b) ((a)>(b) ? (a) : (b))
 #define OPUS_PI (3.14159265F)
 
 #define OPUS_COSF(_x)        ((float)cos(_x))
@@ -54,6 +56,11 @@ static void *opus_realloc(void *_ptr,size_t _size){
 #define FORMAT_S16_LE 0
 #define FORMAT_S24_LE 1
 #define FORMAT_F32_LE 2
+
+#define NBANDS (28)
+#define NFREQS (240*2)
+#define TEST_WIN_SIZE (480*2)
+#define TEST_WIN_STEP (120*2)
 
 static const int format_size[3] = {2, 3, 4};
 typedef union {
@@ -124,35 +131,29 @@ static size_t read_pcm(float **_samples,FILE *_fin,int _nchannels, int format){
 static void band_energy(float *_out,float *_ps,const int *_bands,int _nbands,
  const float *_in,int _nchannels,size_t _nframes,int _window_sz,
  int _step,int _downsample){
-  float *window;
-  float *x;
-  float *c;
-  float *s;
+  float window[TEST_WIN_SIZE];
+  float x[TEST_WIN_SIZE];
   size_t xi;
   int    xj;
   int    ps_sz;
-  window=(float *)opus_malloc((3+_nchannels)*_window_sz*sizeof(*window));
-  c=window+_window_sz;
-  s=c+_window_sz;
-  x=s+_window_sz;
+  kiss_fft_cpx X[2][NFREQS+1];
+  kiss_fftr_cfg kfft;
   ps_sz=_window_sz/2;
+  /* Blackman-Harris window. */
   for(xj=0;xj<_window_sz;xj++){
-    window[xj]=0.5F-0.5F*OPUS_COSF((2*OPUS_PI/(_window_sz-1))*xj);
+    double n = (xj+.5)/_window_sz;
+    window[xj]=0.35875 - 0.48829*cos(2*OPUS_PI*n) + 0.14128*cos(4*OPUS_PI*n) - 0.01168*cos(6*OPUS_PI*n);
   }
-  for(xj=0;xj<_window_sz;xj++){
-    c[xj]=OPUS_COSF((2*OPUS_PI/_window_sz)*xj);
-  }
-  for(xj=0;xj<_window_sz;xj++){
-    s[xj]=OPUS_SINF((2*OPUS_PI/_window_sz)*xj);
-  }
+  kfft = kiss_fftr_alloc(_window_sz, 0, NULL, NULL);
   for(xi=0;xi<_nframes;xi++){
     int ci;
     int xk;
     int bi;
     for(ci=0;ci<_nchannels;ci++){
       for(xk=0;xk<_window_sz;xk++){
-        x[ci*_window_sz+xk]=window[xk]*_in[(xi*_step+xk)*_nchannels+ci];
+        x[xk]=window[xk]*_in[(xi*_step+xk)*_nchannels+ci];
       }
+      kiss_fftr(kfft, x, X[ci]);
     }
     for(bi=xj=0;bi<_nbands;bi++){
       float p[2]={0};
@@ -160,18 +161,9 @@ static void band_energy(float *_out,float *_ps,const int *_bands,int _nbands,
         for(ci=0;ci<_nchannels;ci++){
           float re;
           float im;
-          int   ti;
-          ti=0;
-          re=im=0;
-          for(xk=0;xk<_window_sz;xk++){
-            re+=c[ti]*x[ci*_window_sz+xk];
-            im-=s[ti]*x[ci*_window_sz+xk];
-            ti+=xj;
-            if(ti>=_window_sz)ti-=_window_sz;
-          }
-          re*=_downsample;
-          im*=_downsample;
-          _ps[(xi*ps_sz+xj)*_nchannels+ci]=re*re+im*im+100000;
+          re = X[ci][xj].r*_downsample;
+          im = X[ci][xj].i*_downsample;
+          _ps[(xi*ps_sz+xj)*_nchannels+ci]=re*re+im*im+.1;
           p[ci]+=_ps[(xi*ps_sz+xj)*_nchannels+ci];
         }
       }
@@ -183,11 +175,9 @@ static void band_energy(float *_out,float *_ps,const int *_bands,int _nbands,
       }
     }
   }
-  free(window);
+  free(kfft);
 }
 
-#define NBANDS (28)
-#define NFREQS (240*2)
 
 /*Bands on which we compute the pseudo-NMR (Bark-derived
   CELT bands).*/
@@ -195,8 +185,6 @@ static const int BANDS[NBANDS+1]={
   0,2,4,6,8,10,12,14,16,20,24,28,32,40,48,56,68,80,96,120,156,200, 240,280,320,360,400,440,480
 };
 
-#define TEST_WIN_SIZE (480*2)
-#define TEST_WIN_STEP (120*2)
 
 void usage(const char *_argv0) {
    fprintf(stderr,"Usage: %s [-s] [-48k] [-s16|-s24|-f32] [-r rate2] <file1.sw> <file2.sw>\n",
@@ -211,8 +199,8 @@ int main(int _argc,const char **_argv){
   float   *xb;
   float   *X;
   float   *Y;
-  double    err;
-  float    Q;
+  double    err4;
+  double    err16;
   size_t   xlength;
   size_t   ylength;
   size_t   nframes;
@@ -232,6 +220,7 @@ int main(int _argc,const char **_argv){
   size_t   test_win_step;
   int      max_compare;
   int      format;
+  double rms=-1;
   const char *argv0 = _argv[0];
   if(_argc<3){
     usage(argv0);
@@ -334,6 +323,15 @@ int main(int _argc,const char **_argv){
      (unsigned long)xlength,test_win_size);
     return EXIT_FAILURE;
   }
+  if (nchannels==2 && downsample==1){
+    size_t i;
+    rms=0;
+    for (i=0;i<xlength*nchannels;i++){
+      double e=x[i]-y[i];
+      rms+=e*e;
+    }
+    rms=sqrt(rms/(xlength*nchannels));
+  }
   nframes=(xlength-test_win_size+test_win_step)/test_win_step;
   xb=(float *)opus_malloc(nframes*nbands*nchannels*sizeof(*xb));
   X=(float *)opus_malloc(nframes*nfreqs*nchannels*sizeof(*X));
@@ -347,6 +345,19 @@ int main(int _argc,const char **_argv){
         test_win_size/downsample,test_win_step/downsample,downsample);
   free(y);
   for(xi=0;xi<nframes;xi++){
+    float maxE[2]={0};
+    for(bi=0;bi<nbands;bi++){
+      for(ci=0;ci<nchannels;ci++){
+        maxE[ci] = MAX(maxE[ci], xb[(xi*nbands+bi)*nchannels+ci]);
+      }
+    }
+    /* Allow for up to 105 dB instantaneous dynamic range (95dB here + 10dB in mask application). */
+    for(bi=0;bi<nbands;bi++){
+      for(ci=0;ci<nchannels;ci++){
+        xb[(xi*nbands+bi)*nchannels+ci] = MAX(3.16e-10*maxE[ci], xb[(xi*nbands+bi)*nchannels+ci]);
+      }
+    }
+
     /*Frequency masking (low to high): 10 dB/Bark slope.*/
     for(bi=1;bi<nbands;bi++){
       for(ci=0;ci<nchannels;ci++){
@@ -355,14 +366,14 @@ int main(int _argc,const char **_argv){
       }
     }
     /*Frequency masking (high to low): 15 dB/Bark slope.*/
-    for(bi=nbands-1;bi-->0;){
+    for(bi=nbands-2;bi-->0;){
       for(ci=0;ci<nchannels;ci++){
         xb[(xi*nbands+bi)*nchannels+ci]+=
          0.03F*xb[(xi*nbands+bi+1)*nchannels+ci];
       }
     }
     if(xi>0){
-      /*Temporal masking: -3 dB/2.5ms slope.*/
+      /* Forward temporal masking: -3 dB/2.5ms slope.*/
       for(bi=0;bi<nbands;bi++){
         for(ci=0;ci<nchannels;ci++){
           xb[(xi*nbands+bi)*nchannels+ci]+=
@@ -370,14 +381,25 @@ int main(int _argc,const char **_argv){
         }
       }
     }
+  }
+  /*Backward temporal masking: -10 dB/2.5ms slope.*/
+  for(xi=nframes-2;xi-->0;){
+     for(bi=0;bi<nbands;bi++){
+       for(ci=0;ci<nchannels;ci++){
+         xb[(xi*nbands+bi)*nchannels+ci]+=
+          0.1F*xb[((xi+1)*nbands+bi)*nchannels+ci];
+       }
+     }
+  }
+  for(xi=0;xi<nframes;xi++){
     /* Allowing some cross-talk */
     if(nchannels==2){
       for(bi=0;bi<nbands;bi++){
         float l,r;
         l=xb[(xi*nbands+bi)*nchannels+0];
         r=xb[(xi*nbands+bi)*nchannels+1];
-        xb[(xi*nbands+bi)*nchannels+0]+=0.01F*r;
-        xb[(xi*nbands+bi)*nchannels+1]+=0.01F*l;
+        xb[(xi*nbands+bi)*nchannels+0]+=0.000001F*r;
+        xb[(xi*nbands+bi)*nchannels+1]+=0.000001F*l;
       }
     }
 
@@ -423,45 +445,56 @@ int main(int _argc,const char **_argv){
   if(rate==base_rate)max_compare=BANDS[nbands];
   else if(rate==12000)max_compare=BANDS[ybands];
   else max_compare=BANDS[ybands]-3;
-  err=0;
+  err4=0;
+  err16=0;
   for(xi=0;xi<nframes;xi++){
-    double Ef;
-    Ef=0;
+    double Ef2, Ef4;
+    Ef2=0;
+    Ef4=0;
     for(bi=0;bi<ybands;bi++){
-      double Eb;
-      Eb=0;
+      double Eb2, Eb4;
+      double w;
+      Eb2=Eb4=0;
+      w = .5+.5*tanh(.5*(22-bi));
       for(xj=BANDS[bi];xj<BANDS[bi+1]&&xj<max_compare;xj++){
+        float f, thresh;
+        f = xj*OPUS_PI/240;
+        /* Shape the lower threshold similar to 1/(1 - 0.85*z^-1) deemphasis filter at 48 kHz. */
+        thresh = .1/(.15*.15 + f*f);
         for(ci=0;ci<nchannels;ci++){
           float re;
           float im;
-          re=Y[(xi*yfreqs+xj)*nchannels+ci]/X[(xi*nfreqs+xj)*nchannels+ci];
+          re=(Y[(xi*yfreqs+xj)*nchannels+ci]+thresh)/(X[(xi*nfreqs+xj)*nchannels+ci]+thresh);
           im=re-log(re)-1;
-          Eb+=im;
+          /* Per-band error weighting. */
+          im *= w;
+          Eb2+=im;
+          /* Same for 4th power, but make it less sensitive to very low energies. */
+          re=(Y[(xi*yfreqs+xj)*nchannels+ci]+10*thresh)/(X[(xi*nfreqs+xj)*nchannels+ci]+10*thresh);
+          im=re-log(re)-1;
+          /* Per-band error weighting. */
+          im *= w;
+          Eb4+=im;
         }
       }
-      Eb /= (BANDS[bi+1]-BANDS[bi])*nchannels;
-      Ef += Eb*Eb;
+      Eb2 /= (BANDS[bi+1]-BANDS[bi])*nchannels;
+      Eb4 /= (BANDS[bi+1]-BANDS[bi])*nchannels;
+      Ef2 += Eb2;
+      Ef4 += Eb4*Eb4;
     }
     /*Using a fixed normalization value means we're willing to accept slightly
        lower quality for lower sampling rates.*/
-    Ef/=nbands;
-    Ef*=Ef;
-    err+=Ef*Ef;
+    Ef2/=nbands;
+    Ef4/=nbands;
+    Ef4*=Ef4;
+    err4+=Ef2*Ef2;
+    err16+=Ef4*Ef4;
   }
   free(xb);
   free(X);
   free(Y);
-  err=pow(err/nframes,1.0/16);
-  Q=100*(1-0.5*log(1+err)/log(1.13));
-  if(Q<0){
-    fprintf(stderr,"Test vector FAILS\n");
-    fprintf(stderr,"Internal weighted error is %f\n",err);
-    return EXIT_FAILURE;
-  }
-  else{
-    fprintf(stderr,"Test vector PASSES\n");
-    fprintf(stderr,
-     "Opus quality metric: %.1f %% (internal weighted error is %f)\n",Q,err);
-    return EXIT_SUCCESS;
-  }
+  err4=pow(err4/nframes,1.0/4);
+  err16=pow(err16/nframes,1.0/16);
+  fprintf(stderr, "err4 = %f, err16 = %f, rms = %f\n", err4, err16, rms);
+  return EXIT_SUCCESS;
 }

@@ -1113,7 +1113,6 @@ int celt_decode_with_ec_dred(CELTDecoder * OPUS_RESTRICT st, const unsigned char
       st->end = end = IMAX(1, mode->effEBands-2*(data0>>5));
       LM = (data0>>3)&0x3;
       C = 1 + ((data0>>2)&0x1);
-#ifdef ENABLE_QEXT
       if ((data[0] & 0x03) == 0x03) {
          data++;
          len--;
@@ -1121,6 +1120,7 @@ int celt_decode_with_ec_dred(CELTDecoder * OPUS_RESTRICT st, const unsigned char
             return OPUS_INVALID_PACKET;
          if (data[0] & 0x40) {
             int p;
+            int padding=0;
             data++;
             len--;
             do {
@@ -1131,16 +1131,18 @@ int celt_decode_with_ec_dred(CELTDecoder * OPUS_RESTRICT st, const unsigned char
                len--;
                tmp = p==255 ? 254: p;
                len -= tmp;
-               qext_bytes += tmp;
+               padding += tmp;
             } while (p==255);
-            qext_bytes--;
-            if (len <= 0 || qext_bytes<0) return OPUS_INVALID_PACKET;
+            padding--;
+            if (len <= 0 || padding<0) return OPUS_INVALID_PACKET;
+#ifdef ENABLE_QEXT
+            qext_bytes = padding;
             if (data[len] != QEXT_EXTENSION_ID<<1)
                qext_bytes=0;
             ec_dec_init(&ext_dec, (unsigned char*)data+len+1, qext_bytes);
+#endif
          }
       } else
-#endif
       {
          data++;
          len--;
