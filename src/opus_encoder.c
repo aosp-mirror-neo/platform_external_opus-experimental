@@ -1155,6 +1155,7 @@ opus_int32 opus_encode_native(OpusEncoder *st, const opus_res *pcm, int frame_si
     opus_int32 cbr_bytes=-1;
     opus_val16 stereo_width;
     const CELTMode *celt_mode;
+    int packet_size_cap = 1276;
 #ifndef DISABLE_FLOAT_API
     AnalysisInfo analysis_info;
     int analysis_read_pos_bak=-1;
@@ -1166,7 +1167,12 @@ opus_int32 opus_encode_native(OpusEncoder *st, const opus_res *pcm, int frame_si
 #endif
     ALLOC_STACK;
 
-    max_data_bytes = IMIN(1276, out_data_bytes);
+#ifdef ENABLE_QEXT
+   if (st->enable_qext) packet_size_cap = QEXT_PACKET_SIZE_CAP;
+#endif
+
+    /* Just avoid insane packet sizes here, but the real bounds are applied later on. */
+    max_data_bytes = IMIN(packet_size_cap*6, out_data_bytes);
 
     st->rangeFinal = 0;
     if (frame_size <= 0 || max_data_bytes <= 0)
@@ -1280,7 +1286,7 @@ opus_int32 opus_encode_native(OpusEncoder *st, const opus_res *pcm, int frame_si
     st->bitrate_bps -= dred_bitrate_bps;
 #endif
     if (max_data_bytes<3 || st->bitrate_bps < 3*frame_rate*8
-       || (frame_rate<50 && (max_data_bytes*frame_rate<300 || st->bitrate_bps < 2400)))
+       || (frame_rate<50 && (max_data_bytes*(opus_int32)frame_rate<300 || st->bitrate_bps < 2400)))
     {
        /*If the space is too low to do something useful, emit 'PLC' frames.*/
        int tocmode = st->mode;
@@ -1783,7 +1789,7 @@ opus_int32 opus_encode_native(OpusEncoder *st, const opus_res *pcm, int frame_si
 }
 
 static opus_int32 opus_encode_frame_native(OpusEncoder *st, const opus_res *pcm, int frame_size,
-                unsigned char *data, opus_int32 max_data_bytes,
+                unsigned char *data, opus_int32 orig_max_data_bytes,
                 int float_api, int first_frame,
 #ifdef ENABLE_DRED
                 opus_int32 dred_bitrate_bps,
@@ -1799,6 +1805,7 @@ static opus_int32 opus_encode_frame_native(OpusEncoder *st, const opus_res *pcm,
     const CELTMode *celt_mode;
     int i;
     int ret=0;
+    int max_data_bytes;
     opus_int32 nBytes;
     ec_enc enc;
     int bytes_target;
@@ -1819,6 +1826,7 @@ static opus_int32 opus_encode_frame_native(OpusEncoder *st, const opus_res *pcm,
     VARDECL(opus_res, tmp_prefill);
     SAVE_STACK;
 
+    max_data_bytes = IMIN(orig_max_data_bytes, 1276);
     st->rangeFinal = 0;
     silk_enc = (char*)st+st->silk_enc_offset;
     celt_enc = (CELTEncoder*)((char*)st+st->celt_enc_offset);
@@ -1875,7 +1883,7 @@ static opus_int32 opus_encode_frame_native(OpusEncoder *st, const opus_res *pcm,
 
     data += 1;
 
-    ec_enc_init(&enc, data, max_data_bytes-1);
+    ec_enc_init(&enc, data, orig_max_data_bytes-1);
 
     ALLOC(pcm_buf, (total_buffer+frame_size)*st->channels, opus_res);
     OPUS_COPY(pcm_buf, &st->delay_buffer[(st->encoder_buffer-total_buffer)*st->channels], total_buffer*st->channels);
@@ -2288,6 +2296,12 @@ static opus_int32 opus_encode_frame_native(OpusEncoder *st, const opus_res *pcm,
         nb_compr_bytes = ret;
     } else {
         nb_compr_bytes = (max_data_bytes-1)-redundancy_bytes;
+#ifdef ENABLE_QEXT
+        if (st->mode == MODE_CELT_ONLY && st->enable_qext) {
+           celt_assert(redundancy_bytes==0);
+           nb_compr_bytes = orig_max_data_bytes-1;
+        }
+#endif
 #ifdef ENABLE_DRED
         if (st->dred_duration > 0)
         {
@@ -2538,12 +2552,12 @@ static opus_int32 opus_encode_frame_native(OpusEncoder *st, const opus_res *pcm,
 #endif
     if (apply_padding)
     {
-       if (opus_packet_pad(data, ret, max_data_bytes) != OPUS_OK)
+       if (opus_packet_pad(data, ret, orig_max_data_bytes) != OPUS_OK)
        {
           RESTORE_STACK;
           return OPUS_INTERNAL_ERROR;
        }
-       ret = max_data_bytes;
+       ret = orig_max_data_bytes;
     }
     RESTORE_STACK;
     return ret;
@@ -2710,8 +2724,8 @@ int opus_encoder_ctl(OpusEncoder *st, int request, ...)
                     goto bad_arg;
                 else if (value <= 500)
                     value = 500;
-                else if (value > (opus_int32)300000*st->channels)
-                    value = (opus_int32)300000*st->channels;
+                else if (value > (opus_int32)750000*st->channels)
+                    value = (opus_int32)750000*st->channels;
             }
             st->user_bitrate_bps = value;
         }

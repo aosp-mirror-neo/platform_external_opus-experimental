@@ -289,6 +289,9 @@ static int transient_analysis(const opus_val32 * OPUS_RESTRICT in, int len, int 
            3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  2,
    };
    SAVE_STACK;
+#ifdef FIXED_POINT
+   int in_shift = IMAX(0, celt_ilog2(1+celt_maxabs32(in, C*len))-14);
+#endif
    ALLOC(tmp, len, opus_val16);
 
    *weak_transient = 0;
@@ -320,7 +323,7 @@ static int transient_analysis(const opus_val32 * OPUS_RESTRICT in, int len, int 
          float mem00;
 #endif
          opus_val32 x,y;
-         x = SHR32(in[i+c*len],SIG_SHIFT);
+         x = SHR32(in[i+c*len],in_shift);
          y = ADD32(mem0, x);
 #ifdef FIXED_POINT
          mem0 = mem1 + y - SHL32(x,1);
@@ -587,7 +590,7 @@ void celt_preemphasis(const opus_res * OPUS_RESTRICT pcmp, celt_sig * OPUS_RESTR
 #else
    (void)clip; /* Avoids a warning about clip being unused. */
 #endif
-#if defined(CUSTOM_MODES) || defined(ENABLE_OPUS_CUSTOM_API)
+#if defined(CUSTOM_MODES) || defined(ENABLE_OPUS_CUSTOM_API) || defined(ENABLE_QEXT)
    if (coef[1] != 0)
    {
       opus_val16 coef1 = coef[1];
@@ -2916,7 +2919,7 @@ int opus_custom_encoder_ctl(CELTEncoder * OPUS_RESTRICT st, int request, ...)
          opus_int32 value = va_arg(ap, opus_int32);
          if (value<=500 && value!=OPUS_BITRATE_MAX)
             goto bad_arg;
-         value = IMIN(value, 260000*st->channels);
+         value = IMIN(value, 750000*st->channels);
          st->bitrate = value;
       }
       break;
