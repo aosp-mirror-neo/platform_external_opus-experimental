@@ -144,7 +144,7 @@ static void band_energy(float *_out,float *_ps,const int *_bands,int _nbands,
     double n = (xj+.5)/_window_sz;
     window[xj]=0.35875 - 0.48829*cos(2*OPUS_PI*n) + 0.14128*cos(4*OPUS_PI*n) - 0.01168*cos(6*OPUS_PI*n);
   }
-  kfft = kiss_fftr_alloc(_window_sz, 0, NULL, NULL);
+  kfft = mini_kiss_fftr_alloc(_window_sz, 0, NULL, NULL);
   for(xi=0;xi<_nframes;xi++){
     int ci;
     int xk;
@@ -153,7 +153,7 @@ static void band_energy(float *_out,float *_ps,const int *_bands,int _nbands,
       for(xk=0;xk<_window_sz;xk++){
         x[xk]=window[xk]*_in[(xi*_step+xk)*_nchannels+ci];
       }
-      kiss_fftr(kfft, x, X[ci]);
+      mini_kiss_fftr(kfft, x, X[ci]);
     }
     for(bi=xj=0;bi<_nbands;bi++){
       float p[2]={0};
@@ -187,7 +187,7 @@ static const int BANDS[NBANDS+1]={
 
 
 void usage(const char *_argv0) {
-   fprintf(stderr,"Usage: %s [-s] [-48k] [-s16|-s24|-f32] [-r rate2] <file1.sw> <file2.sw>\n",
+   fprintf(stderr,"Usage: %s [-s] [-48k] [-s16|-s24|-f32] [-r rate2] [-thresholds err4 err16 rms] <file1.sw> <file2.sw>\n",
     _argv0);
 }
 
@@ -220,8 +220,11 @@ int main(int _argc,const char **_argv){
   size_t   test_win_step;
   int      max_compare;
   int      format;
+  int      skip=0;
   double rms=-1;
   const char *argv0 = _argv[0];
+  double err4_threshold=-1, err16_threshold=-1, rms_threshold=-1;
+  int compare_thresholds=0;
   if(_argc<3){
     usage(argv0);
     return EXIT_FAILURE;
@@ -256,6 +259,21 @@ int main(int _argc,const char **_argv){
       format=FORMAT_F32_LE;
       _argv++;
       _argc--;
+    } else if(strcmp(_argv[1],"-skip")==0){
+      skip=atoi(_argv[2]);
+      _argv+=2;
+      _argc-=2;
+    } else if(strcmp(_argv[1],"-thresholds")==0){
+      if (_argc < 7) {
+        usage(argv0);
+        return EXIT_FAILURE;
+      }
+      err4_threshold=atof(_argv[2]);
+      err16_threshold=atof(_argv[3]);
+      rms_threshold=atof(_argv[4]);
+      compare_thresholds=1;
+      _argv+=4;
+      _argc-=4;
     } else if(strcmp(_argv[1],"-r")==0){
       rate=atoi(_argv[2]);
       if(rate!=8000&&rate!=12000&&rate!=16000&&rate!=24000&&rate!=48000&&rate!=96000){
@@ -313,6 +331,10 @@ int main(int _argc,const char **_argv){
   fclose(fin1);
   ylength=read_pcm(&y,fin2,nchannels,format);
   fclose(fin2);
+  skip *= nchannels;
+  y += skip/downsample;
+  ylength -= skip/downsample;
+  if (skip && ylength*downsample > xlength) ylength = xlength/downsample;
   if(xlength!=ylength*downsample){
     fprintf(stderr,"Sample counts do not match (%lu!=%lu).\n",
      (unsigned long)xlength,(unsigned long)ylength*downsample);
@@ -343,7 +365,7 @@ int main(int _argc,const char **_argv){
   free(x);
   band_energy(NULL,Y,BANDS,ybands,y,nchannels,nframes,
         test_win_size/downsample,test_win_step/downsample,downsample);
-  free(y);
+  free(y-skip/downsample);
   for(xi=0;xi<nframes;xi++){
     float maxE[2]={0};
     for(bi=0;bi<nbands;bi++){
@@ -496,5 +518,13 @@ int main(int _argc,const char **_argv){
   err4=pow(err4/nframes,1.0/4);
   err16=pow(err16/nframes,1.0/16);
   fprintf(stderr, "err4 = %f, err16 = %f, rms = %f\n", err4, err16, rms);
+  if (compare_thresholds) {
+    if (err4 <= err4_threshold && err16 <= err16_threshold && rms <= rms_threshold) {
+      fprintf(stderr, "Comparison PASSED\n");
+    } else {
+      fprintf(stderr, "*** Comparison FAILED *** (thresholds were %f %f %f)\n", err4_threshold, err16_threshold, rms_threshold);
+      return EXIT_FAILURE;
+    }
+  }
   return EXIT_SUCCESS;
 }

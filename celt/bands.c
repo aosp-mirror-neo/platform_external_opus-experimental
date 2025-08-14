@@ -43,10 +43,6 @@
 #include "quant_bands.h"
 #include "pitch.h"
 
-#ifndef M_PI
-#define M_PI 3.141592653
-#endif
-
 int hysteresis_decision(opus_val16 val, const opus_val16 *thresholds, const opus_val16 *hysteresis, int N, int prev)
 {
    int i;
@@ -1381,6 +1377,11 @@ static unsigned quant_band(struct band_ctx *ctx, celt_norm *X,
    return cm;
 }
 
+#ifdef FIXED_POINT
+#define MIN_STEREO_ENERGY 2
+#else
+#define MIN_STEREO_ENERGY 1e-10f
+#endif
 
 /* This function is responsible for encoding and decoding a band for the stereo case. */
 static unsigned quant_band_stereo(struct band_ctx *ctx, celt_norm *X, celt_norm *Y,
@@ -1412,6 +1413,12 @@ static unsigned quant_band_stereo(struct band_ctx *ctx, celt_norm *X, celt_norm 
 
    orig_fill = fill;
 
+   if (encode) {
+      if (ctx->bandE[ctx->i] < MIN_STEREO_ENERGY || ctx->bandE[ctx->m->nbEBands+ctx->i] < MIN_STEREO_ENERGY) {
+         if (ctx->bandE[ctx->i] > ctx->bandE[ctx->m->nbEBands+ctx->i]) OPUS_COPY(Y, X, N);
+         else OPUS_COPY(X, Y, N);
+      }
+   }
    compute_theta(ctx, &sctx, X, Y, N, &b, B, B, LM, 1, &fill ARG_QEXT(&ext_b));
    inv = sctx.inv;
    imid = sctx.imid;
@@ -1433,8 +1440,8 @@ static unsigned quant_band_stereo(struct band_ctx *ctx, celt_norm *X, celt_norm 
 # ifdef ENABLE_QEXT
    (void)imid;
    (void)iside;
-   mid = cos(.5*M_PI*sctx.itheta_q30*(1.f/(1<<30)));
-   side = sin(.5*M_PI*sctx.itheta_q30*(1.f/(1<<30)));
+   mid = celt_cos_norm2(sctx.itheta_q30*(1.f/(1<<30)));
+   side = celt_cos_norm2(1.f-sctx.itheta_q30*(1.f/(1<<30)));
 # else
    mid = (1.f/32768)*imid;
    side = (1.f/32768)*iside;
@@ -1910,4 +1917,3 @@ void quant_all_bands(int encode, const CELTMode *m, int start, int end,
 
    RESTORE_STACK;
 }
-
