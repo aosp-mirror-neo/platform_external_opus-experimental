@@ -966,7 +966,8 @@ AC_ARG_ENABLE([osce],
 )
 
 AS_IF([test "$enable_osce" = "yes" || test "$enable_osce_training_data" = "yes"], [
-       AC_DEFINE([ENABLE_OSCE], [1], [Enable Opus Speech Coding Enhancement])
+       AC_DEFINE([ENABLE_OSCE], [1], [Enable Opus Speech Coding Enhancement]),
+       AC_DEFINE([ENABLE_OSCE_BWE], [1], [Enable Opus Speech Coding Enhancement Blind BWE])
 ])
 
 AM_CONDITIONAL([ENABLE_OSCE], [test "$enable_osce" = "yes" || test "$enable_osce_training_data" = "yes"])
@@ -1106,4 +1107,3 @@ AC_MSG_NOTICE([
  Type "make; make install" to compile and install
  Type "make check" to run the test suite
 ])
-
