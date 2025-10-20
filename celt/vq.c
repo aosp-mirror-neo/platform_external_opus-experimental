@@ -385,7 +385,7 @@ static opus_val32 op_pvq_search_N2(const celt_norm *X, int *iy, int *up_iy, int 
    opus_val32 rcp_sum;
    int offset;
    sum = ABS32(X[0]) + ABS32(X[1]);
-   if (sum == 0) {
+   if (sum < EPSILON) {
       iy[0] = K;
       up_iy[0] = up*K;
       iy[1]=up_iy[1]=0;
@@ -478,7 +478,7 @@ static opus_val32 op_pvq_search_extra(const celt_norm *X, int *iy, int *up_iy, i
    SAVE_STACK;
    for (i=0;i<N;i++) sum += ABS32(X[i]);
    ALLOC(Xn, N, opus_val32);
-   if (sum == 0)
+   if (sum < EPSILON)
       failed = 1;
    else {
 #ifdef FIXED_POINT

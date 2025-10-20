@@ -357,7 +357,7 @@ void kf_factor(int n,int * facbuf)
  * The return value is a contiguous block of memory, allocated with malloc.  As such,
  * It can be freed with free(), rather than a kiss_fft-specific function.
  * */
-kiss_fft_cfg kiss_fft_alloc(int nfft,int inverse_fft,void * mem,size_t * lenmem )
+kiss_fft_cfg mini_kiss_fft_alloc(int nfft,int inverse_fft,void * mem,size_t * lenmem )
 {
 
     kiss_fft_cfg st=NULL;
@@ -390,15 +390,15 @@ kiss_fft_cfg kiss_fft_alloc(int nfft,int inverse_fft,void * mem,size_t * lenmem 
 }
 
 
-void kiss_fft_stride(kiss_fft_cfg st,const kiss_fft_cpx *fin,kiss_fft_cpx *fout,int in_stride)
+void mini_kiss_fft_stride(kiss_fft_cfg st,const kiss_fft_cpx *fin,kiss_fft_cpx *fout,int in_stride)
 {
     assert(fin != fout);
     kf_work( fout, fin, 1,in_stride, st->factors,st );
 }
 
-void kiss_fft(kiss_fft_cfg cfg,const kiss_fft_cpx *fin,kiss_fft_cpx *fout)
+void mini_kiss_fft(kiss_fft_cfg cfg,const kiss_fft_cpx *fin,kiss_fft_cpx *fout)
 {
-    kiss_fft_stride(cfg,fin,fout,1);
+    mini_kiss_fft_stride(cfg,fin,fout,1);
 }
 
 
@@ -410,7 +410,7 @@ struct kiss_fftr_state{
     kiss_fft_cpx * super_twiddles;
 };
 
-kiss_fftr_cfg kiss_fftr_alloc(int nfft,int inverse_fft,void * mem,size_t * lenmem)
+kiss_fftr_cfg mini_kiss_fftr_alloc(int nfft,int inverse_fft,void * mem,size_t * lenmem)
 {
 
     int i;
@@ -420,7 +420,7 @@ kiss_fftr_cfg kiss_fftr_alloc(int nfft,int inverse_fft,void * mem,size_t * lenme
     assert ((nfft & 1) == 0);
     nfft >>= 1;
 
-    kiss_fft_alloc (nfft, inverse_fft, NULL, &subsize);
+    mini_kiss_fft_alloc (nfft, inverse_fft, NULL, &subsize);
     memneeded = sizeof(struct kiss_fftr_state) + subsize + sizeof(kiss_fft_cpx) * ( nfft * 3 / 2);
 
     if (lenmem == NULL) {
@@ -436,7 +436,7 @@ kiss_fftr_cfg kiss_fftr_alloc(int nfft,int inverse_fft,void * mem,size_t * lenme
     st->substate = (kiss_fft_cfg) (st + 1); /*just beyond kiss_fftr_state struct */
     st->tmpbuf = (kiss_fft_cpx *) (((char *) st->substate) + subsize);
     st->super_twiddles = st->tmpbuf + nfft;
-    kiss_fft_alloc(nfft, inverse_fft, st->substate, &subsize);
+    mini_kiss_fft_alloc(nfft, inverse_fft, st->substate, &subsize);
 
     for (i = 0; i < nfft/2; ++i) {
         double phase =
@@ -448,7 +448,7 @@ kiss_fftr_cfg kiss_fftr_alloc(int nfft,int inverse_fft,void * mem,size_t * lenme
     return st;
 }
 
-void kiss_fftr(kiss_fftr_cfg st,const kiss_fft_scalar *timedata,kiss_fft_cpx *freqdata)
+void mini_kiss_fftr(kiss_fftr_cfg st,const kiss_fft_scalar *timedata,kiss_fft_cpx *freqdata)
 {
     /* input buffer timedata is stored row-wise */
     int k,ncfft;
@@ -459,7 +459,7 @@ void kiss_fftr(kiss_fftr_cfg st,const kiss_fft_scalar *timedata,kiss_fft_cpx *fr
     ncfft = st->substate->nfft;
 
     /*perform the parallel fft of two real signals packed in real,imag*/
-    kiss_fft( st->substate , (const kiss_fft_cpx*)timedata, st->tmpbuf );
+    mini_kiss_fft( st->substate , (const kiss_fft_cpx*)timedata, st->tmpbuf );
     /* The real part of the DC element of the frequency spectrum in st->tmpbuf
      * contains the sum of the even-numbered elements of the input time sequence
      * The imag part is the sum of the odd-numbered elements

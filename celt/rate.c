@@ -644,7 +644,6 @@ int clt_compute_allocation(const CELTMode *m, int start, int end, const int *off
    RESTORE_STACK;
    return codedBands;
 }
-
 #ifdef ENABLE_QEXT
 
 static const unsigned char last_zero[3] = {64, 50, 0};
@@ -739,6 +738,14 @@ void clt_compute_extra_allocation(const CELTMode *m, const CELTMode *qext_mode, 
    int tot_samples;
    VARDECL(int, depth);
    VARDECL(opus_int32, cap);
+#ifdef FUZZING
+   float depth_std;
+#endif
+   SAVE_STACK;
+#ifdef FUZZING
+   depth_std = -10.f*log(1e-8+(float)rand()/RAND_MAX);
+   depth_std = FMAX(0, FMIN(48, depth_std));
+#endif
    if (qext_mode != NULL) {
       celt_assert(end==m->nbEBands);
       tot_bands = end + qext_end;
@@ -835,6 +842,10 @@ void clt_compute_extra_allocation(const CELTMode *m, const CELTMode *qext_mode, 
          depth[i] = PSHR32(MIN32(SHL32(cap[i], 10), MAX32(min[i], flatE[i]-fill)), 10-2);
 #else
          depth[i] = (int)floor(.5+4*MIN32(SHL32(cap[i], 10), MAX32(min[i], flatE[i]-fill)));
+#endif
+#ifdef FUZZING
+         depth[i] = (int)-depth_std*log(1e-8+(float)rand()/RAND_MAX);
+         depth[i] = IMAX(0, IMIN(cap[i]<<2, depth[i]));
 #endif
          if (ec_tell_frac(ec) + 80 < ec->storage*8<<BITRES)
             ec_enc_depth(ec, depth[i], 4*cap[i], &last);
