@@ -171,6 +171,10 @@ int main(int argc, char **argv) {
     }
 #ifdef USE_WEIGHTS_FILE
     data = load_blob(filename, &len);
+    if (data==NULL) {
+        fprintf(stderr, "Can't open blob file %s\n", filename);
+	exit(1);
+    }
 #endif
     if (mode == MODE_FEATURES) {
         LPCNetEncState *net;
@@ -232,6 +236,10 @@ int main(int argc, char **argv) {
         unsigned char bits[MAX_DRED_PACKET];
         RDOVAEDecState rdovae_dec;
         RDOVAEDec rdovae_dec_model;
+#ifdef USE_WEIGHTS_FILE
+	WeightArray *rdovaedec_arrays;
+	parse_weights(&rdovaedec_arrays, data, len);
+#endif
         init_rdovaedec(&rdovae_dec_model, rdovaedec_arrays);
         while (1) {
            unsigned char ch[4];

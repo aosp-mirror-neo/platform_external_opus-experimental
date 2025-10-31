@@ -344,7 +344,6 @@ endif
 EXTRA_DIST = opus.pc.in \
              opus-uninstalled.pc.in \
              opus.m4 \
-             Makefile.mips \
              Makefile.unix \
              CMakeLists.txt \
              cmake/CFeatureCheck.cmake \
@@ -376,7 +375,8 @@ EXTRA_DIST = opus.pc.in \
              tests/meson.build \
              doc/meson.build \
              tests/run_vectors.sh \
-	     celt/mini_kfft.c \
+             celt/mini_kfft.c \
+             celt/arm/meson.build \
              celt/arm/arm2gnu.pl \
              celt/arm/celt_pitch_xcorr_arm.s
 

@@ -40,8 +40,35 @@
 #include "pitch.h"
 #include "SigProc_FIX.h"
 
-#if defined(MIPSr1_ASM)
-#include "mips/vq_mipsr1.h"
+#if defined(FIXED_POINT)
+void norm_scaleup(celt_norm *X, int N, int shift) {
+   int i;
+   celt_assert(shift >= 0);
+   if (shift <= 0) return;
+   for (i=0;i<N;i++) X[i] = SHL32(X[i], shift);
+}
+
+void norm_scaledown(celt_norm *X, int N, int shift) {
+   int i;
+   celt_assert(shift >= 0);
+   if (shift <= 0) return;
+   for (i=0;i<N;i++) X[i] = PSHR32(X[i], shift);
+}
+
+opus_val32 celt_inner_prod_norm(const celt_norm *x, const celt_norm *y, int len, int arch) {
+   int i;
+   opus_val32 sum = 0;
+   (void)arch;
+   for (i=0;i<len;i++) sum += x[i]*y[i];
+   return sum;
+}
+opus_val32 celt_inner_prod_norm_shift(const celt_norm *x, const celt_norm *y, int len, int arch) {
+   int i;
+   opus_val64 sum = 0;
+   (void)arch;
+   for (i=0;i<len;i++) sum += x[i]*(opus_val64)y[i];
+   return sum>>2*(NORM_SHIFT-14);
+}
 #endif
 
 #if defined(FIXED_POINT)
