@@ -198,7 +198,7 @@ int opus_encoder_get_size(int channels)
     int ret;
     if (channels<1 || channels > 2)
         return 0;
-    ret = silk_Get_Encoder_Size( &silkEncSizeBytes );
+    ret = silk_Get_Encoder_Size( &silkEncSizeBytes, channels );
     if (ret)
         return 0;
     silkEncSizeBytes = align(silkEncSizeBytes);
@@ -224,7 +224,7 @@ int opus_encoder_init(OpusEncoder* st, opus_int32 Fs, int channels, int applicat
 
     OPUS_CLEAR((char*)st, opus_encoder_get_size(channels));
     /* Create SILK encoder */
-    ret = silk_Get_Encoder_Size( &silkEncSizeBytes );
+    ret = silk_Get_Encoder_Size( &silkEncSizeBytes, channels );
     if (ret)
         return OPUS_BAD_ARG;
     silkEncSizeBytes = align(silkEncSizeBytes);
@@ -239,7 +239,7 @@ int opus_encoder_init(OpusEncoder* st, opus_int32 Fs, int channels, int applicat
 
     st->arch = opus_select_arch();
 
-    ret = silk_InitEncoder( silk_enc, st->arch, &st->silk_mode );
+    ret = silk_InitEncoder( silk_enc, st->channels, st->arch, &st->silk_mode );
     if(ret)return OPUS_INTERNAL_ERROR;
 
     /* default SILK parameters */
@@ -1068,7 +1068,7 @@ static opus_val32 compute_frame_energy(const opus_val16 *pcm, int frame_size, in
 /* Decides if DTX should be turned on (=1) or off (=0) */
 static int decide_dtx_mode(opus_int activity,            /* indicates if this frame contains speech/music */
                            int *nb_no_activity_ms_Q1,    /* number of consecutive milliseconds with no activity, in Q1 */
-                           int frame_size_ms_Q1          /* number of miliseconds in this update, in Q1 */
+                           int frame_size_ms_Q1          /* number of milliseconds in this update, in Q1 */
                            )
 
 {
@@ -1520,7 +1520,7 @@ opus_int32 opus_encode_native(OpusEncoder *st, const opus_res *pcm, int frame_si
     if (st->mode != MODE_CELT_ONLY && st->prev_mode == MODE_CELT_ONLY)
     {
         silk_EncControlStruct dummy;
-        silk_InitEncoder( silk_enc, st->arch, &dummy);
+        silk_InitEncoder( silk_enc, st->channels, st->arch, &dummy);
         prefill=1;
     }
 
@@ -3151,7 +3151,7 @@ int opus_encoder_ctl(OpusEncoder *st, int request, ...)
            OPUS_CLEAR(start, sizeof(OpusEncoder) - (start - (char*)st));
 
            celt_encoder_ctl(celt_enc, OPUS_RESET_STATE);
-           silk_InitEncoder( silk_enc, st->arch, &dummy );
+           silk_InitEncoder( silk_enc, st->channels, st->arch, &dummy );
 #ifdef ENABLE_DRED
            /* Initialize DRED Encoder */
            dred_encoder_reset( &st->dred_encoder );
