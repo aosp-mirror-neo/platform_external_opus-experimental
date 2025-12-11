@@ -743,7 +743,7 @@ void clt_compute_extra_allocation(const CELTMode *m, const CELTMode *qext_mode, 
 #endif
    SAVE_STACK;
 #ifdef FUZZING
-   depth_std = -10.f*log(1e-8+(float)rand()/RAND_MAX);
+   depth_std = -10.f*log(1e-8+(float)rand()/(float)RAND_MAX);
    depth_std = FMAX(0, FMIN(48, depth_std));
 #endif
    if (qext_mode != NULL) {
@@ -763,6 +763,7 @@ void clt_compute_extra_allocation(const CELTMode *m, const CELTMode *qext_mode, 
       for (i=start;i<m->nbEBands+qext_end;i++) {
          extra_pulses[i] = extra_equant[i] = 0;
       }
+      RESTORE_STACK;
       return;
    }
    ALLOC(depth, tot_bands, int);
@@ -844,7 +845,7 @@ void clt_compute_extra_allocation(const CELTMode *m, const CELTMode *qext_mode, 
          depth[i] = (int)floor(.5+4*MIN32(SHL32(cap[i], 10), MAX32(min[i], flatE[i]-fill)));
 #endif
 #ifdef FUZZING
-         depth[i] = (int)-depth_std*log(1e-8+(float)rand()/RAND_MAX);
+         depth[i] = (int)-depth_std*log(1e-8+(float)rand()/(float)RAND_MAX);
          depth[i] = IMAX(0, IMIN(cap[i]<<2, depth[i]));
 #endif
          if (ec_tell_frac(ec) + 80 < ec->storage*8<<BITRES)
@@ -870,5 +871,6 @@ void clt_compute_extra_allocation(const CELTMode *m, const CELTMode *qext_mode, 
          extra_pulses[end+i] = ((((qext_mode->eBands[i+1]-qext_mode->eBands[i])<<LM)-1)*C * depth[end+i] * (1<<BITRES) + 2)>>2;
       }
    }
+   RESTORE_STACK;
 }
 #endif
